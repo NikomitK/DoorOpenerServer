@@ -10,7 +10,6 @@ import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.ServerSocket
 import java.time.LocalDateTime
-import java.util.*
 import kotlin.random.Random
 import kotlin.random.nextInt
 
@@ -64,6 +63,23 @@ fun main(args: Array<String>) {
                     response.text = "Invalid token! :C"
                     response.internalMessage = "invalid token"
                 }
+            } else if(message.type == "keypadConfig") {
+                if(storage.tokens.contains(message.token)) {
+                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
+                        response.text = "Expired token. Login again :C"
+                        response.internalMessage = "invalid token"
+                        storage.tokens.remove(message.token!!)
+                    } else {
+                        storage.isKeypadEnabled = (message.content!!.toInt() in 1 until 10)
+                        storage.keypadTime = message.content.toInt()
+                        renewToken(message.token!!)
+                        response.text = "Saved config! :D"
+                        response.internalMessage = "success"
+                    }
+                } else {
+                        response.text = "Invalid token! :C"
+                        response.internalMessage = "invalid token"
+                    }
             }
 
             PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
@@ -86,4 +102,8 @@ fun renewToken(token: String) {
 
 fun open() {
     println("OPEN!")
+}
+
+fun isBetween(number: Int, start: Int, end: Int): Boolean {
+    return (number in (start + 1) until end)
 }
