@@ -17,7 +17,7 @@ import kotlin.random.nextInt
 var storage: Storage = Storage()
 
 fun main(args: Array<String>) {
-    // TODO remove expired tokens, renew tokens, handle remaining cases (invalid token, open, save numpad stuff, numpad open), store pin hashed, store in file
+    // TODO handle remaining cases (numpad open, change pin, reset device, delete otp, use otp(integrate in open)), store pin hashed, store in file
     println("Hello World!")
 
     println("Program arguments: ${args.joinToString()}")
@@ -60,8 +60,15 @@ fun main(args: Array<String>) {
                         response.internalMessage = "success"
                     }
                 } else {
+                    if(message.pin != null) { // add otps to storage and check if stored, maybe add expiration/start date
+                        open()
+                        removeOtp(message.pin)
+                        response.text = "Successfully used OTP! :D"
+                        response.internalMessage = "success"
+                    } else {
                     response.text = "Invalid token! :C"
                     response.internalMessage = "invalid token"
+                    }
                 }
             } else if(message.type == "keypadConfig") {
                 if(storage.tokens.contains(message.token)) {
@@ -80,7 +87,7 @@ fun main(args: Array<String>) {
                         response.text = "Invalid token! :C"
                         response.internalMessage = "invalid token"
                     }
-            }
+            } else if(message.type == )
 
             PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
             withContext(Dispatchers.IO) {
@@ -99,6 +106,8 @@ fun generateToken(): String {
 fun renewToken(token: String) {
     storage.tokens[token] = LocalDateTime.now().plusDays(30)
 }
+
+fun removeOtp(otp: String)
 
 fun open() {
     println("OPEN!")
