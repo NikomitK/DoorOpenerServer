@@ -97,13 +97,9 @@ fun generateToken(): String {
 }
 
 fun renewToken(token: String) {
-
+    storage.tokens[token] = LocalDateTime.now().plusDays(30)
 }
 
 fun open() {
     println("OPEN!")
-}
-
-fun isBetween(number: Int, start: Int, end: Int): Boolean {
-    return (number in (start + 1) until end)
 }
