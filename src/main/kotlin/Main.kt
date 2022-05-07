@@ -1,3 +1,4 @@
+import ch.qos.logback.classic.Logger
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -5,7 +6,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import messagetypes.Message
 import messagetypes.Response
+import mu.KotlinLogging
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.ServerSocket
@@ -16,12 +19,14 @@ import kotlin.random.nextInt
 
 
 var storage: Storage = Storage()
+val logger = KotlinLogging.logger {}
 
 fun main(args: Array<String>) {
     // TODO handle remaining cases (numpad open, change pin, reset device, delete otp, use otp(integrate in open)), store pin hashed, store in file
     println("Hello World!")
 
     println("Program arguments: ${args.joinToString()}")
+
 
     val serverSocket: ServerSocket = ServerSocket(5687)
     while(true){
@@ -30,9 +35,10 @@ fun main(args: Array<String>) {
         GlobalScope.launch {
             println("Connection from: " + socket.inetAddress)
             val message: Message = Gson().fromJson(BufferedReader(InputStreamReader(socket.getInputStream())).readLine(), Message::class.java)
-            println(message)
+            logger.info {message}
             val response = Response()
             if(message.type == "login") {
+                logger.error { "login try" }
                 if(message.isNewDevice!!) {
                     if(storage.pin == null){
                         storage.pin = message.pin
@@ -64,7 +70,7 @@ fun main(args: Array<String>) {
                 } else {
                     if(storage.otps.contains(message.token)) { // add otps to storage and check if stored, maybe add expiration/start date
                         open()
-                        removeOtp(message.token!!.toInt())
+                        storage.otps.remove(Gson().fromJson(message.content, Otp::class.java).pin)
                         response.text = "Successfully used OTP! :D"
                         response.internalMessage = "success"
                     } else {
@@ -178,7 +184,25 @@ fun main(args: Array<String>) {
                         storage.tokens.remove(message.token!!)
                     } else {
                         storage = Storage()
+                        File("LogFile.log").writeText("")
                         response.text = "Ready for a new start :D"
+                        response.internalMessage = "success"
+                    }
+                } else {
+                    response.text = "Invalid token! :C"
+                    response.internalMessage = "invalid token"
+                }
+            } else if(message.type == "requestLogs") {
+                if(storage.tokens.contains(message.token)) {
+                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
+                        response.text = "Expired token. Login again :C"
+                        response.internalMessage = "invalid token"
+                        storage.tokens.remove(message.token!!)
+                    } else {
+                        val logArray: Array<String> = File("LogFile.log").readLines().toTypedArray()
+                        renewToken(message.token!!)
+                        response.text = Gson().toJson(logArray)
+                        println(response.text)
                         response.internalMessage = "success"
                     }
                 } else {
