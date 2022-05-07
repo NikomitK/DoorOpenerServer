@@ -1,4 +1,3 @@
-import ch.qos.logback.classic.Logger
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -22,200 +21,136 @@ var storage: Storage = Storage()
 val logger = KotlinLogging.logger {}
 
 fun main(args: Array<String>) {
-    // TODO handle remaining cases (numpad open, change pin, reset device, delete otp, use otp(integrate in open)), store pin hashed, store in file
+    // TODO handle remaining cases (numpad open(coroutine/second thread)), store pin hashed, store in file, open method
     println("Hello World!")
 
     println("Program arguments: ${args.joinToString()}")
 
 
-    val serverSocket: ServerSocket = ServerSocket(5687)
-    while(true){
+    val serverSocket = ServerSocket(5687)
+    while (true) {
         val socket = serverSocket.accept()
         socket.soTimeout = 1500
-        GlobalScope.launch {
+        GlobalScope.launch (Dispatchers.IO) {
             println("Connection from: " + socket.inetAddress)
-            val message: Message = Gson().fromJson(BufferedReader(InputStreamReader(socket.getInputStream())).readLine(), Message::class.java)
-            logger.info {message}
+            val message: Message = Gson().fromJson(
+                BufferedReader(InputStreamReader(socket.getInputStream())).readLine(), Message::class.java
+            )
             val response = Response()
-            if(message.type == "login") {
-                logger.error { "login try" }
-                if(message.isNewDevice!!) {
-                    if(storage.pin == null){
+            if (message.type == "login") {
+                if (message.isNewDevice!!) {
+                    if (storage.pin == null) {
                         storage.pin = message.pin
                         response.text = "Success!"
                         response.internalMessage = generateToken()
+                        logger.info { "Hello World, ig :)" }
                     } else {
                         response.text = "Not a new device!"
+                        logger.warn(socket.inetAddress.toString() + " tried setting this up as new device")
                     }
                 } else {
-                    if(message.pin == storage.pin && storage.pin != null) {
+                    if (message.pin == storage.pin && storage.pin != null) {
                         response.text = "Success!"
                         response.internalMessage = generateToken()
+                        logger.info(socket.inetAddress.toString() + " logged in")
                     } else {
                         response.text = "Wrong pin!"
+                        logger.warn(socket.inetAddress.toString() + " tried logging in with a wrong pin")
                     }
                 }
-            } else if(message.type == "open") {
-                if(storage.tokens.contains(message.token)) {
-                    if(storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        open()
-                        renewToken(message.token!!)
-                        response.text = "Success!"
-                        response.internalMessage = "success"
+            } else {
+                if (authenticateToken(message)) {
+                    when (message.type) {
+                        "open" -> {
+                            open()
+                            response.text = "Success!"
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " opened the door")
+                        }
+                        "keypadConfig" -> {
+                            storage.isKeypadEnabled = (message.content!!.toInt() in 1 until 10)
+                            storage.keypadTime = message.content.toInt()
+                            response.text = "Saved config! :D"
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " changed the keypad configuration")
+                        }
+                        "otpAdd" -> {
+                            val tempOtp: Otp = Gson().fromJson(message.content, Otp::class.java)
+                            storage.otps[tempOtp.pin] = LocalDate.parse(tempOtp.expirationDate)
+                            response.text = "Saved OTP! :D"
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " added a new OTP")
+                        }
+                        "otpRemove" -> {
+                            storage.otps.remove(Gson().fromJson(message.content, Otp::class.java).pin)
+                            response.text = "Removed OTP! :O"
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " removed an OTP")
+                        }
+                        "keepLogs" -> {
+                            storage.keepLogs = message.content!!.lowercase().contains("true")
+                            response.text = "Saved preference! :D"
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " changed the keeping of logs to ${storage.keepLogs}")
+                        }
+                        "changePin" -> {
+                            storage.pin = Integer.parseInt(message.content)
+                            storage.tokens.clear()
+                            response.text = "Changed pin! :D"
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " changed the pin")
+                        }
+                        "globalLogout" -> {
+                            storage.tokens.clear()
+                            response.text = "Logged everyone out! :/"
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " logged everyone out")
+                        }
+                        "reset" -> {
+                            storage = Storage()
+                            File("LogFile.log").writeText("")
+                            response.text = "Ready for a new start :D"
+                            response.internalMessage = "success"
+                            logger.warn(socket.inetAddress.toString() + " reset this device")
+                            logger.info(socket.inetAddress.toString() + " Ready for a new start :D")
+                        }
+                        "requestLogs" -> {
+                            val logArray: Array<String> = File("LogFile.log").readLines().toTypedArray()
+                            response.text = Gson().toJson(logArray)
+                            println(response.text)
+                            response.internalMessage = "success"
+                            logger.info(socket.inetAddress.toString() + " requested the logs")
+                        }
                     }
                 } else {
-                    if(storage.otps.contains(message.token)) { // add otps to storage and check if stored, maybe add expiration/start date
-                        open()
-                        storage.otps.remove(Gson().fromJson(message.content, Otp::class.java).pin)
-                        response.text = "Successfully used OTP! :D"
-                        response.internalMessage = "success"
-                    } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
-                    }
-                }
-            } else if(message.type == "keypadConfig") {
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
+                        response.text = "Invalid token :C Login again!"
                         response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        storage.isKeypadEnabled = (message.content!!.toInt() in 1 until 10)
-                        storage.keypadTime = message.content.toInt()
-                        renewToken(message.token!!)
-                        response.text = "Saved config! :D"
-                        response.internalMessage = "success"
-                    }
-                } else {
-                        response.text = "Invalid token! :C"
-                        response.internalMessage = "invalid token"
-                }
-            } else if(message.type == "otpAdd") {
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        val tempOtp: Otp = Gson().fromJson(message.content, Otp::class.java)
-                        storage.otps[tempOtp.pin] = LocalDate.parse(tempOtp.expirationDate)
-                        renewToken(message.token!!)
-                        response.text = "Saved OTP! :D"
-                        response.internalMessage = "success"
-                    }
-                } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
-                }
-            } else if(message.type == "otpRemove"){
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        storage.otps.remove(Gson().fromJson(message.content, Otp::class.java).pin)
-                        renewToken(message.token!!)
-                        response.text = "Removed OTP! :O"
-                        response.internalMessage = "success"
-                    }
-                } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
-                }
-            } else if(message.type == "keepLogs") {
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        storage.keepLogs = message.content!!.lowercase().contains("true")
-                        renewToken(message.token!!)
-                        response.text = "Saved preference! :D"
-                        response.internalMessage = "success"
-                    }
-                } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
-                }
-            } else if(message.type == "changePin") {
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        storage.pin = Integer.parseInt(message.content)
-                        storage.tokens.clear()
-                        renewToken(message.token!!)
-                        response.text = "Changed pin! :D"
-                        response.internalMessage = "success"
-                    }
-                } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
-                }
-            } else if(message.type == "globalLogout") {
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        storage.tokens.clear()
-                        response.text = "Logged everyone out! :/"
-                        response.internalMessage = "success"
-                    }
-                } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
-                }
-            } else if(message.type == "reset") {
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        storage = Storage()
-                        File("LogFile.log").writeText("")
-                        response.text = "Ready for a new start :D"
-                        response.internalMessage = "success"
-                    }
-                } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
-                }
-            } else if(message.type == "requestLogs") {
-                if(storage.tokens.contains(message.token)) {
-                    if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-                        response.text = "Expired token. Login again :C"
-                        response.internalMessage = "invalid token"
-                        storage.tokens.remove(message.token!!)
-                    } else {
-                        val logArray: Array<String> = File("LogFile.log").readLines().toTypedArray()
-                        renewToken(message.token!!)
-                        response.text = Gson().toJson(logArray)
-                        println(response.text)
-                        response.internalMessage = "success"
-                    }
-                } else {
-                    response.text = "Invalid token! :C"
-                    response.internalMessage = "invalid token"
+                        logger.info(socket.inetAddress.toString() + " tried logging in with an invalid token")
                 }
             }
 
-            PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
             withContext(Dispatchers.IO) {
+                PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
                 socket.close()
             }
         }
+    }
+}
+
+fun authenticateToken(message: Message): Boolean {
+    return if (storage.tokens.contains(message.token)) {
+        if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
+            storage.tokens.remove(message.token!!)
+            false
+        } else {
+            renewToken(message.token!!)
+            true
+        }
+    } else if(storage.otps.contains(message.token)){
+            storage.otps.remove(message.token)
+        true
+    } else {
+        false
     }
 }
 
@@ -227,10 +162,6 @@ fun generateToken(): String {
 
 fun renewToken(token: String) {
     storage.tokens[token] = LocalDateTime.now().plusDays(30)
-}
-
-fun removeOtp(otp: Int) {
-
 }
 
 fun open() {
