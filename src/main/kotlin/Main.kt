@@ -17,24 +17,38 @@ import kotlin.random.Random
 import kotlin.random.nextInt
 
 
-var storage: Storage = Storage()
+lateinit var storage: Storage
+val storagePath: File = File("storage")
+val storageFile: File = File(storagePath.path + File.separator + "storageFile.json")
 val logger = KotlinLogging.logger {}
 
 fun main(args: Array<String>) {
-    // TODO handle remaining cases (numpad open(coroutine/second thread)), store pin hashed, store in file, open method
+    // TODO handle remaining cases (numpad open(coroutine/second thread)), store pin hashed, open method
     println("Hello World!")
-
     println("Program arguments: ${args.joinToString()}")
 
+    storage = if (!storageFile.createNewFile() && !storagePath.mkdir() && storageFile.readText().isNotEmpty()) {
+        try {
+            Gson().fromJson(storageFile.readText(), Storage::class.java)
+        } catch (ignore: Exception) {
+            logger.debug { "Storage file error" }
+            Storage()
+        }
+    } else {
+        logger.debug { "No storage file" }
+        Storage()
+    }
 
     val serverSocket = ServerSocket(5687)
+
+    // API loop
     while (true) {
         val socket = serverSocket.accept()
         socket.soTimeout = 1500
-        GlobalScope.launch (Dispatchers.IO) {
+        GlobalScope.launch(Dispatchers.IO) {
             println("Connection from: " + socket.inetAddress)
             val message: Message = Gson().fromJson(
-                BufferedReader(InputStreamReader(socket.getInputStream())).readLine(), Message::class.java
+                decrypt(BufferedReader(InputStreamReader(socket.getInputStream())).readLine()), Message::class.java
             )
             val response = Response()
             if (message.type == "login") {
@@ -123,16 +137,17 @@ fun main(args: Array<String>) {
                         }
                     }
                 } else {
-                        response.text = "Invalid token :C Login again!"
-                        response.internalMessage = "invalid token"
-                        logger.info(socket.inetAddress.toString() + " tried logging in with an invalid token")
+                    response.text = "Invalid token :C Login again!"
+                    response.internalMessage = "invalid token"
+                    logger.warn(socket.inetAddress.toString() + " tried logging in with an invalid token")
                 }
             }
 
             withContext(Dispatchers.IO) {
-                PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
+                PrintWriter(socket.getOutputStream(), true).println(encrypt(Gson().toJson(response)))
                 socket.close()
             }
+            storageFile.writeText(Gson().toJson(storage))
         }
     }
 }
@@ -140,14 +155,16 @@ fun main(args: Array<String>) {
 fun authenticateToken(message: Message): Boolean {
     return if (storage.tokens.contains(message.token)) {
         if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
+            logger.debug { "used an outdated token" }
             storage.tokens.remove(message.token!!)
             false
         } else {
             renewToken(message.token!!)
             true
         }
-    } else if(storage.otps.contains(message.token)){
-            storage.otps.remove(message.token)
+    } else if (storage.otps.contains(message.token)) {
+        logger.debug { "used an otp as token" }
+        storage.otps.remove(message.token)
         true
     } else {
         false
@@ -165,5 +182,16 @@ fun renewToken(token: String) {
 }
 
 fun open() {
+    //TODO
     println("OPEN!")
+}
+
+fun encrypt(message: String): String {
+    //TODO
+    return message
+}
+
+fun decrypt(message: String): String {
+    //TODO
+    return message
 }
