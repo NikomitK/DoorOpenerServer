@@ -11,7 +11,7 @@
             <totalSizeCap>1GB</totalSizeCap>
         </rollingPolicy>
         <encoder>
-            <pattern>[%-5level] %d{HH:mm:ss} %msg%n</pattern>
+            <pattern>[%-5level] %d{dd.MM-HH:mm} %msg%n</pattern>
         </encoder>
     </appender>
     <appender name="FILE" class="ch.qos.logback.core.FileAppender">
@@ -23,7 +23,7 @@
     </appender>
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>[%-5level] %d{HH:mm:ss} %msg%n</pattern>
+            <pattern>[%-5level] %d{dd.MM-HH:mm} %msg%n</pattern>
         </encoder>
     </appender>
 
