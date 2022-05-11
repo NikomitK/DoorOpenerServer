@@ -1,8 +1,5 @@
 import com.google.gson.Gson
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import messagetypes.Message
 import messagetypes.Response
 import mu.KotlinLogging
@@ -10,9 +7,11 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.io.PrintWriter
-import java.net.ServerSocket
+import java.net.Socket
 import java.time.LocalDate
 import java.time.LocalDateTime
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLServerSocketFactory
 import kotlin.random.Random
 import kotlin.random.nextInt
 
@@ -24,54 +23,26 @@ val logger = KotlinLogging.logger {}
 
 fun main(args: Array<String>) {
     // TODO handle remaining cases (numpad open(coroutine/second thread)), store pin hashed, open method
+    System.setProperty("javax.net.ssl.keyStore", "certificates" + File.separator + "dooropenercertificate.pfx")
+    System.setProperty("javax.net.ssl.keyStorePassword", "dooropenerpassword")
     println("Hello World!")
     println("Program arguments: ${args.joinToString()}")
 
-    storage = if (!storageFile.createNewFile() && !storagePath.mkdir() && storageFile.readText().isNotEmpty()) {
-        try {
-            Gson().fromJson(storageFile.readText(), Storage::class.java)
-        } catch (ignore: Exception) {
-            logger.debug { "Storage file error" }
-            Storage()
-        }
-    } else {
-        logger.debug { "No storage file" }
-        Storage()
-    }
+    initStorage()
 
-    val serverSocket = ServerSocket(5687)
+    val serverSocket = createServerSocket()
 
     // API loop
     while (true) {
         val socket = serverSocket.accept()
+        println("Connection from: " + socket.inetAddress)
         socket.soTimeout = 1500
         GlobalScope.launch(Dispatchers.IO) {
-            println("Connection from: " + socket.inetAddress)
             val message: Message = Gson().fromJson(
-                decrypt(BufferedReader(InputStreamReader(socket.getInputStream())).readLine()), Message::class.java
-            )
-            val response = Response()
+                BufferedReader(InputStreamReader(socket.getInputStream())).readLine(), Message::class.java)
+            var response = Response()
             if (message.type == "login") {
-                if (message.isNewDevice!!) {
-                    if (storage.pin == null) {
-                        storage.pin = message.pin
-                        response.text = "Success!"
-                        response.internalMessage = generateToken()
-                        logger.info { "Hello World, ig :)" }
-                    } else {
-                        response.text = "Not a new device!"
-                        logger.warn(socket.inetAddress.toString() + " tried setting this up as new device")
-                    }
-                } else {
-                    if (message.pin == storage.pin && storage.pin != null) {
-                        response.text = "Success!"
-                        response.internalMessage = generateToken()
-                        logger.info(socket.inetAddress.toString() + " logged in")
-                    } else {
-                        response.text = "Wrong pin!"
-                        logger.warn(socket.inetAddress.toString() + " tried logging in with a wrong pin")
-                    }
-                }
+                response = handleLogin(message, socket)
             } else {
                 if (authenticateToken(message)) {
                     when (message.type) {
@@ -144,12 +115,60 @@ fun main(args: Array<String>) {
             }
 
             withContext(Dispatchers.IO) {
-                PrintWriter(socket.getOutputStream(), true).println(encrypt(Gson().toJson(response)))
+                PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
                 socket.close()
             }
             storageFile.writeText(Gson().toJson(storage))
         }
     }
+}
+
+fun initStorage() {
+    storagePath.mkdir()
+    storageFile.createNewFile()
+    storage = if (storageFile.readText().isNotEmpty()) {
+        try {
+            Gson().fromJson(storageFile.readText(), Storage::class.java)
+        } catch (ignore: Exception) {
+            logger.debug { "Storage file error" }
+            Storage()
+        }
+    } else {
+        logger.debug { "No storage file" }
+        Storage()
+    }
+}
+
+fun createServerSocket(): SSLServerSocket {
+    val serverSocket = SSLServerSocketFactory.getDefault().createServerSocket(5687) as SSLServerSocket
+    serverSocket.enabledProtocols = arrayOf("TLSv1.3")
+    serverSocket.enabledCipherSuites = arrayOf("TLS_AES_256_GCM_SHA384")
+    return serverSocket
+}
+
+fun handleLogin(message: Message, socket: Socket): Response {
+    val response = Response()
+    if (message.isNewDevice!!) {
+        if (storage.pin == null) {
+            storage.pin = message.pin
+            response.text = "Success!"
+            response.internalMessage = generateToken()
+            logger.info { "Hello World, ig :)" }
+        } else {
+            response.text = "Not a new device!"
+            logger.warn(socket.inetAddress.toString() + " tried setting this up as new device")
+        }
+    } else {
+        if (message.pin == storage.pin && storage.pin != null) {
+            response.text = "Success!"
+            response.internalMessage = generateToken()
+            logger.info(socket.inetAddress.toString() + " logged in")
+        } else {
+            response.text = "Wrong pin!"
+            logger.warn(socket.inetAddress.toString() + " tried logging in with a wrong pin")
+        }
+    }
+    return response
 }
 
 fun authenticateToken(message: Message): Boolean {
@@ -184,14 +203,4 @@ fun renewToken(token: String) {
 fun open() {
     //TODO
     println("OPEN!")
-}
-
-fun encrypt(message: String): String {
-    //TODO
-    return message
-}
-
-fun decrypt(message: String): String {
-    //TODO
-    return message
 }
