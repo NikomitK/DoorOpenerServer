@@ -174,7 +174,7 @@ object ConnectionHandler : CoroutineScope by MainScope() {
         launch(Dispatchers.IO) {
 
             if (tempKeypadMode != storage.isKeypadEnabled) {
-                switchKeyboard()
+                switchKeypad()
             }
         }
         storage.keypadTime = message.content.toInt()

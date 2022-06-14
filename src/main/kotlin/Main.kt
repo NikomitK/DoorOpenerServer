@@ -57,8 +57,11 @@ var keyListener = object : NativeKeyListener {
             3662 -> println("Plus")
             28 -> {
                 println("Enter")
-                scope.launch(Dispatchers.IO) {
-                    verifyKeypadCode(keypadCode)
+
+                with(keypadCode) {
+                    scope.launch(Dispatchers.IO) {
+                        verifyKeypadCode(this@with)
+                    }
                 }
                 keypadCode = ""
             }
@@ -83,15 +86,40 @@ fun main(args: Array<String>) {
     // the next line is to prevent the console from being spammed
     Logger.getLogger(GlobalScreen::class.java.getPackage().name).level = Level.OFF
 
-    //GlobalScreen.registerNativeHook()
+    GlobalScreen.registerNativeHook()
 
     initStorage()
 
-    serverSocket = createServerSocket()
-//    if (storage.useTls) secureServerSocket = createSecureServerSocket()
-    switchKeyboard()
+    // Keypad stuff
+    switchKeypad()
 
-//    startSecureSocket()
+    thread {
+        while (true) {
+            if(storage.isKeypadEnabled) {
+                Thread.sleep(5000)
+                continue
+            }
+            when (readln()) {
+                "usetls=true" -> {
+                    println("use tls")
+                }
+                "usetls=false" -> {
+                    println("don't use tls")
+                }
+                "reset" -> {
+                    println("Reset")
+                    doReset()
+                }
+                "showpin" -> {
+                    println("Pin: ${storage.pin}")
+                }
+            }
+            println("when done")
+        }
+    }
+
+    // Network stuff
+    serverSocket = createServerSocket()
 
     thread {
         var secureServerSocket: SSLServerSocket? = null
@@ -153,96 +181,10 @@ fun initStorage() {
     }
 }
 
-/**
- * tries starting a coroutine which handles
- * connections over tls or cancelling the job it created
- */
-//fun startSecureSocket() {
-//    if (storage.useTls) {
-//        if(secureServerJob != null) {
-//            println("job not null")
-//            secureServerJob!!.start()
-//            return
-//        }
-//        secureServerJob = MainScope().launch(Dispatchers.IO) {
-//            if(secureServerSocket == null) secureServerSocket = createSecureServerSocket()
-//            println(secureServerSocket)
-//            if(secureServerSocket != null) {
-//                println("before while")
-//                while(isActive) {
-//                    try {
-//                        val socket = secureServerSocket!!.accept()
-//
-//                        println("Secure connection from: " + socket.inetAddress)
-//                        socket.soTimeout = 1500
-//                        scope.launch(Dispatchers.IO) {
-//                            ConnectionHandler.handleConnection(socket)
-//                        }
-//                    } catch (_: SocketException) { // useless
-//                    }
-//                }
-//            }
-//        }
-//    } else {
-//        secureServerJob?.cancel("kaenzel bidde, dange")
-////        secureServerJob = null
-//        secureServerSocket?.close()
-////        secureServerSocket = null
-//    }
-//}
-
-class SecureSocketThread : Thread() {
-    override fun run() {
-        val secureServerSocket = createSecureServerSocket()
-        while (true) {
-            try {
-                val socket = secureServerSocket!!.accept()
-
-                println("Secure connection from: " + socket.inetAddress)
-                socket.soTimeout = 1500
-                scope.launch(Dispatchers.IO) {
-                    ConnectionHandler.handleConnection(socket)
-                }
-
-            } catch (_: SocketException) { // useless
-            }
-        }
-    }
-}
-
-fun switchKeyboard() {
+fun switchKeypad() {
     if (!storage.isKeypadEnabled) {
         unregisterKeypad()
-        cliJob = scope.launch(Dispatchers.IO) {
-
-            while (true) {
-                when (readln()) {
-                    "usetls=true" -> {
-                        if (secure) break
-                        secure = true
-                        if (serverSocket.isBound) serverSocket.close()
-                        serverSocket = createServerSocket()
-                    }
-                    "usetls=false" -> {
-                        if (!secure) break
-                        secure = false
-                        if (serverSocket.isBound) serverSocket.close()
-                        serverSocket = createServerSocket()
-
-                    }
-                    "reset" -> {
-                        println("Reset")
-                        doReset()
-                    }
-                    "showpin" -> {
-                        println("Pin: ${storage.pin}")
-                    }
-                }
-                println("when done")
-            }
-        }
     } else {
-        cliJob?.cancel()
         registerKeypad()
     }
 }
