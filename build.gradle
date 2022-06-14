@@ -17,6 +17,9 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.9.0'
     implementation 'io.github.microutils:kotlin-logging-jvm:2.1.21'
     implementation 'ch.qos.logback:logback-classic:1.2.11'
+//    implementation 'com.1stleg:jnativehook:2.1.0'
+    implementation files('C:\\Users\\nikob\\IdeaProjects\\DoorOpenerTestServer\\src\\main\\resources\\jnativehook-2.1.0.jar')
+
 }
 
 jar {

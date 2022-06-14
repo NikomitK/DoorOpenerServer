@@ -1,57 +1,148 @@
 import com.google.gson.Gson
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import messagetypes.Message
-import messagetypes.Response
+import com.google.gson.GsonBuilder
+import com.google.gson.TypeAdapter
+import com.google.gson.stream.JsonReader
+import com.google.gson.stream.JsonToken
+import com.google.gson.stream.JsonWriter
+import kotlinx.coroutines.*
 import mu.KotlinLogging
-import java.io.BufferedReader
+import org.jnativehook.GlobalScreen
+import org.jnativehook.keyboard.NativeKeyEvent
+import org.jnativehook.keyboard.NativeKeyListener
+import raspberrypi.OutputPin
 import java.io.File
-import java.io.InputStreamReader
-import java.io.PrintWriter
-import java.net.Socket
+import java.net.ServerSocket
+import java.net.SocketException
 import java.time.LocalDate
-import java.time.LocalDateTime
+import java.util.logging.Level
+import java.util.logging.Logger
+import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLServerSocketFactory
+import kotlin.concurrent.thread
 import kotlin.random.Random
 import kotlin.random.nextInt
 
-
+val scope = MainScope()
 lateinit var storage: Storage
+var secure: Boolean = false
+var cliJob: Job? = null
+var secureServerJob: Job? = null
+
+//var secureServerThread: SecureSocketThread? = SecureSocketThread()
+lateinit var serverSocket: ServerSocket
+
+//var secureServerSocket: SSLServerSocket? = null
 val storagePath: File = File("storage")
 val storageFile: File = File(storagePath.path + File.separator + "storageFile.json")
+val certificatePath: File = File("certificates")
+val certCredentialsFile: File = File(certificatePath.path + File.separator + "credentialsFile.json")
+val outputPin: OutputPin = OutputPin(26, false)
 val logger = KotlinLogging.logger {}
+val gsonPretty: Gson =
+    GsonBuilder().setPrettyPrinting().registerTypeAdapter(LocalDate::class.java, LocalDateAdapter()).create()
+var keyListener = object : NativeKeyListener {
+    var keypadCode: String = ""
+    override fun nativeKeyTyped(p0: NativeKeyEvent?) {
+        // not needed
+    }
 
-fun main(args: Array<String>) = runBlocking {
-    // TODO handle remaining cases (numpad open(coroutine/second thread)), store pin hashed, open method
-    System.setProperty("javax.net.ssl.keyStore", "certificates" + File.separator + "dooropenercertificate.pfx")
-    System.setProperty("javax.net.ssl.keyStorePassword", "dooropenerpassword")
+    override fun nativeKeyPressed(nativeKeyEvent: NativeKeyEvent) {
+        val pressedKeyText = NativeKeyEvent.getKeyText(nativeKeyEvent.keyCode)
+        when (nativeKeyEvent.keyCode) {
+            3658 -> {
+                println("Minus")
+                keypadCode = ""
+            }
+            3662 -> println("Plus")
+            28 -> {
+                println("Enter")
+                scope.launch(Dispatchers.IO) {
+                    verifyKeypadCode(keypadCode)
+                }
+                keypadCode = ""
+            }
+            else -> if (pressedKeyText.length == 1) {
+                keypadCode += pressedKeyText
+            }
+        }
+    }
+
+    override fun nativeKeyReleased(p0: NativeKeyEvent?) {
+        // not needed
+    }
+}
+
+fun main(args: Array<String>) {
+    // TODO store pin hashed, own messagetype for otp, answer with better string than invalid token for wrong otp
+
     println("Hello World!")
     println("Program arguments: ${args.joinToString()}")
 
+
+    // the next line is to prevent the console from being spammed
+    Logger.getLogger(GlobalScreen::class.java.getPackage().name).level = Level.OFF
+
+    //GlobalScreen.registerNativeHook()
+
     initStorage()
 
-    val serverSocket = createServerSocket()
+    serverSocket = createServerSocket()
+//    if (storage.useTls) secureServerSocket = createSecureServerSocket()
+    switchKeyboard()
 
-    // API loop
-    while (true) {
-        val socket = serverSocket.accept()
-        println("Connection from: " + socket.inetAddress)
-        socket.soTimeout = 1500
-        launch(Dispatchers.IO) {
-            handleConnection(socket)
+//    startSecureSocket()
+
+    thread {
+        var secureServerSocket: SSLServerSocket? = null
+        while (true) {
+            if (secureServerSocket == null) {
+                secureServerSocket = createSecureServerSocket()
+            }
+            if (secureServerSocket == null || !storage.useTls) {
+                Thread.sleep(5000)
+                continue
+            }
+
+            val socket = secureServerSocket.accept()
+            scope.launch(Dispatchers.IO) {
+                try {
+                    println("Secure connection from: " + socket.inetAddress)
+                    socket.soTimeout = 1500
+                    ConnectionHandler.handleConnection(socket)
+
+                } catch (_: SocketException) { // useless
+                } catch (_: SSLHandshakeException) { // useless
+                }
+            }
+
         }
     }
+
+
+// API loop
+    while (true) {
+        try {
+            val socket = serverSocket.accept()
+            scope.launch(Dispatchers.IO) {
+                println("Connection from: " + socket.inetAddress)
+                socket.soTimeout = 1500
+                ConnectionHandler.handleConnection(socket)
+                if (socket.isConnected) socket.close()
+            }
+        } catch (_: SocketException) { // useless
+        }
+
+    }
 }
+
 
 fun initStorage() {
     storagePath.mkdir()
     storageFile.createNewFile()
     storage = if (storageFile.readText().isNotEmpty()) {
         try {
-            Gson().fromJson(storageFile.readText(), Storage::class.java)
+            gsonPretty.fromJson(storageFile.readText(), Storage::class.java)
         } catch (ignore: Exception) {
             logger.debug { "Storage file error" }
             Storage()
@@ -62,153 +153,223 @@ fun initStorage() {
     }
 }
 
-fun createServerSocket(): SSLServerSocket {
-    val serverSocket = SSLServerSocketFactory.getDefault().createServerSocket(5687) as SSLServerSocket
-    serverSocket.enabledProtocols = arrayOf("TLSv1.3")
-    serverSocket.enabledCipherSuites = arrayOf("TLS_AES_256_GCM_SHA384")
-    return serverSocket
-}
+/**
+ * tries starting a coroutine which handles
+ * connections over tls or cancelling the job it created
+ */
+//fun startSecureSocket() {
+//    if (storage.useTls) {
+//        if(secureServerJob != null) {
+//            println("job not null")
+//            secureServerJob!!.start()
+//            return
+//        }
+//        secureServerJob = MainScope().launch(Dispatchers.IO) {
+//            if(secureServerSocket == null) secureServerSocket = createSecureServerSocket()
+//            println(secureServerSocket)
+//            if(secureServerSocket != null) {
+//                println("before while")
+//                while(isActive) {
+//                    try {
+//                        val socket = secureServerSocket!!.accept()
+//
+//                        println("Secure connection from: " + socket.inetAddress)
+//                        socket.soTimeout = 1500
+//                        scope.launch(Dispatchers.IO) {
+//                            ConnectionHandler.handleConnection(socket)
+//                        }
+//                    } catch (_: SocketException) { // useless
+//                    }
+//                }
+//            }
+//        }
+//    } else {
+//        secureServerJob?.cancel("kaenzel bidde, dange")
+////        secureServerJob = null
+//        secureServerSocket?.close()
+////        secureServerSocket = null
+//    }
+//}
 
-suspend fun handleConnection(socket: Socket) {
-    val message: Message = Gson().fromJson(
-        BufferedReader(InputStreamReader(socket.getInputStream())).readLine(), Message::class.java
-    )
-    var response = Response()
-    if (message.type == "login") {
-        response = handleLogin(message, socket)
-    } else {
-        if (authenticateToken(message)) {
-            when (message.type) {
-                "open" -> {
-                    open()
-                    response.text = "Success!"
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " opened the door")
+class SecureSocketThread : Thread() {
+    override fun run() {
+        val secureServerSocket = createSecureServerSocket()
+        while (true) {
+            try {
+                val socket = secureServerSocket!!.accept()
+
+                println("Secure connection from: " + socket.inetAddress)
+                socket.soTimeout = 1500
+                scope.launch(Dispatchers.IO) {
+                    ConnectionHandler.handleConnection(socket)
                 }
-                "keypadConfig" -> {
-                    storage.isKeypadEnabled = (message.content!!.toInt() in 1 until 10)
-                    storage.keypadTime = message.content.toInt()
-                    response.text = "Saved config! :D"
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " changed the keypad configuration")
-                }
-                "otpAdd" -> {
-                    val tempOtp: Otp = Gson().fromJson(message.content, Otp::class.java)
-                    storage.otps[tempOtp.pin] = LocalDate.parse(tempOtp.expirationDate)
-                    response.text = "Saved OTP! :D"
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " added a new OTP")
-                }
-                "otpRemove" -> {
-                    storage.otps.remove(Gson().fromJson(message.content, Otp::class.java).pin)
-                    response.text = "Removed OTP! :O"
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " removed an OTP")
-                }
-                "keepLogs" -> {
-                    storage.keepLogs = message.content!!.lowercase().contains("true")
-                    response.text = "Saved preference! :D"
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " changed the keeping of logs to ${storage.keepLogs}")
-                }
-                "changePin" -> {
-                    storage.pin = Integer.parseInt(message.content)
-                    storage.tokens.clear()
-                    response.text = "Changed pin! :D"
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " changed the pin")
-                }
-                "globalLogout" -> {
-                    storage.tokens.clear()
-                    response.text = "Logged everyone out! :/"
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " logged everyone out")
-                }
-                "reset" -> {
-                    storage = Storage()
-                    File("LogFile.log").writeText("")
-                    response.text = "Ready for a new start :D"
-                    response.internalMessage = "success"
-                    logger.warn(socket.inetAddress.toString() + " reset this device")
-                    logger.info(socket.inetAddress.toString() + " Ready for a new start :D")
-                }
-                "requestLogs" -> {
-                    val logArray: Array<String> = File("LogFile.log").readLines().toTypedArray()
-                    response.text = Gson().toJson(logArray)
-                    println(response.text)
-                    response.internalMessage = "success"
-                    logger.info(socket.inetAddress.toString() + " requested the logs")
-                }
+
+            } catch (_: SocketException) { // useless
             }
-        } else {
-            response.text = "Invalid token :C Login again!"
-            response.internalMessage = "invalid token"
-            logger.warn(socket.inetAddress.toString() + " tried logging in with an invalid token")
         }
     }
-
-    withContext(Dispatchers.IO) {
-        PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
-        socket.close()
-    }
-    storageFile.writeText(Gson().toJson(storage))
 }
 
-fun handleLogin(message: Message, socket: Socket): Response {
-    val response = Response()
-    if (message.isNewDevice!!) {
-        if (storage.pin == null) {
-            storage.pin = message.pin
-            response.text = "Success!"
-            response.internalMessage = generateToken()
-            logger.info { "Hello World, ig :)" }
-        } else {
-            response.text = "Not a new device!"
-            logger.warn(socket.inetAddress.toString() + " tried setting this up as new device")
+fun switchKeyboard() {
+    if (!storage.isKeypadEnabled) {
+        unregisterKeypad()
+        cliJob = scope.launch(Dispatchers.IO) {
+
+            while (true) {
+                when (readln()) {
+                    "usetls=true" -> {
+                        if (secure) break
+                        secure = true
+                        if (serverSocket.isBound) serverSocket.close()
+                        serverSocket = createServerSocket()
+                    }
+                    "usetls=false" -> {
+                        if (!secure) break
+                        secure = false
+                        if (serverSocket.isBound) serverSocket.close()
+                        serverSocket = createServerSocket()
+
+                    }
+                    "reset" -> {
+                        println("Reset")
+                        doReset()
+                    }
+                    "showpin" -> {
+                        println("Pin: ${storage.pin}")
+                    }
+                }
+                println("when done")
+            }
         }
     } else {
-        if (message.pin == storage.pin && storage.pin != null) {
-            response.text = "Success!"
-            response.internalMessage = generateToken()
-            logger.info(socket.inetAddress.toString() + " logged in")
-        } else {
-            response.text = "Wrong pin!"
-            logger.warn(socket.inetAddress.toString() + " tried logging in with a wrong pin")
-        }
+        cliJob?.cancel()
+        registerKeypad()
     }
-    return response
 }
 
-fun authenticateToken(message: Message): Boolean {
-    return if (storage.tokens.contains(message.token)) {
-        if (storage.tokens[message.token]!!.isBefore(LocalDateTime.now())) {
-            logger.debug { "used an outdated token" }
-            storage.tokens.remove(message.token!!)
-            false
-        } else {
-            renewToken(message.token!!)
+/**
+ * creates a server socket running
+ * on port 5687
+ * returns a ServerSocket
+ */
+fun createServerSocket(): ServerSocket {
+    return ServerSocket(5687)
+}
+
+/**
+ * Tries to create an SSLServerSocket
+ * with a given certificate and password
+ * for it
+ * @return an SSLServerSocket if the certificate is valid, else null
+ */
+fun createSecureServerSocket(): SSLServerSocket? {
+    if (!storage.useTls) return null
+    if (checkCertificateCredentials() && useCertificateCredentials()) {
+        val serverSocket = SSLServerSocketFactory.getDefault().createServerSocket(5688) as SSLServerSocket
+        serverSocket.enabledProtocols = arrayOf("TLSv1.3")
+        serverSocket.enabledCipherSuites = arrayOf("TLS_AES_256_GCM_SHA384")
+        return serverSocket
+    }
+    return null
+}
+
+/**
+ * checks if the user supplied credentials for the certificate
+ */
+fun checkCertificateCredentials(): Boolean {
+    certificatePath.mkdir()
+    if (!certCredentialsFile.exists()) {
+        certCredentialsFile.createNewFile()
+        certCredentialsFile.writeText(gsonPretty.toJson(CertificateCredentials("", "")))
+        return false
+    }
+    return true
+}
+
+/**
+ * tries using the supplied keystore name and password
+ * returns true if everything worked properly, else false
+ */
+fun useCertificateCredentials(): Boolean {
+    return try {
+        val certCreds = gsonPretty.fromJson(certCredentialsFile.readText(), CertificateCredentials::class.java)
+        if (certCreds.keystoreName.isNotBlank() && certCreds.keystorePassword.isNotBlank()) {
+            System.setProperty(
+                "javax.net.ssl.keyStore", certificatePath.path + File.separator + certCreds.keystoreName
+            )
+            System.setProperty("javax.net.ssl.keyStorePassword", certCreds.keystorePassword)
             true
-        }
-    } else if (storage.otps.contains(message.token)) {
-        logger.debug { "used an otp as token" }
-        storage.otps.remove(message.token)
-        true
-    } else {
+        } else false
+    } catch (e: Exception) {
         false
+    }
+}
+
+// Gson throws an error when serializing LocalDate/Time without this
+internal class LocalDateAdapter : TypeAdapter<LocalDate?>() {
+
+    override fun write(jsonWriter: JsonWriter, localDate: LocalDate?) {
+        if (localDate == null) {
+            jsonWriter.nullValue()
+        } else {
+            jsonWriter.value(localDate.toString())
+        }
+    }
+
+    override fun read(jsonReader: JsonReader): LocalDate? {
+        return if (jsonReader.peek() == JsonToken.NULL) {
+            jsonReader.nextNull()
+            null
+        } else {
+            LocalDate.parse(jsonReader.nextString())
+        }
     }
 }
 
 fun generateToken(): String {
     val stringToken: String = Random.nextInt(IntRange(1000000, 9999999)).toString()
-    storage.tokens[stringToken] = LocalDateTime.now().plusDays(30)
+    storage.tokens[stringToken] = LocalDate.now().plusDays(30)
     return stringToken
 }
 
-fun renewToken(token: String) {
-    storage.tokens[token] = LocalDateTime.now().plusDays(30)
+fun doReset() {
+    storage = Storage()
+    File("LogFile.log").writeText("")
 }
 
-fun open() {
-    //TODO
-    println("OPEN!")
+suspend fun doOpen(time: Int) = coroutineScope {
+    launch(Dispatchers.IO) {
+        outputPin.setHigh()
+        delay(time.toLong() * 1000)
+        outputPin.setLow()
+    }
+}
+
+fun renewToken(token: String) {
+    storage.tokens[token] = LocalDate.now().plusDays(30)
+}
+
+suspend fun open(time: Int) = coroutineScope {
+    launch(Dispatchers.IO) {
+        outputPin.setHigh()
+        delay(time.toLong() * 1000)
+        outputPin.setLow()
+    }
+}
+
+fun registerKeypad() {
+    GlobalScreen.addNativeKeyListener(keyListener)
+}
+
+fun unregisterKeypad() {
+    GlobalScreen.removeNativeKeyListener(keyListener)
+}
+
+suspend fun verifyKeypadCode(keypadCode: String) = coroutineScope {
+    if (storage.pin == keypadCode.toIntOrNull()) {
+        launch { open(storage.keypadTime) }
+        logger.info { "The door was opened by the keypad" }
+        return@coroutineScope
+    }
+    logger.warn { "Someone used a wrong pin at the keypad" }
 }
