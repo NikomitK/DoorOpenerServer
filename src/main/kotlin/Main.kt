@@ -81,12 +81,9 @@ fun checkpwSafe(plainText: String, hashed: String): Boolean {
 }
 
 fun main(args: Array<String>) {
-    // TODO own messagetype for otp, answer with better string than invalid token for wrong otp
 
     println("Hello World!")
     println("Program arguments: ${args.joinToString()}")
-
-
 
 
     initStorage()
@@ -100,16 +97,18 @@ fun main(args: Array<String>) {
 
     thread {
         while (true) {
-            if(storage.isKeypadEnabled) {
+            if (storage.isKeypadEnabled) {
                 Thread.sleep(5000)
                 continue
             }
             when (readln()) {
                 "usetls=true" -> {
-                    println("use tls")
+                    if (!storage.useTls) println("Switched TLS mode to on") else println("TLS mode is already on")
+                    storage.useTls = true
                 }
                 "usetls=false" -> {
-                    println("don't use tls")
+                    if (storage.useTls) println("Switched TLS mode to off") else println("TLS mode is already off")
+                    storage.useTls = false
                 }
                 "reset" -> {
                     println("Reset")
@@ -278,6 +277,7 @@ fun generateToken(): String {
 
 fun doReset() {
     storage = Storage()
+    storage.save(storageFile)
     File("LogFile.log").writeText("")
 }
 
@@ -319,3 +319,8 @@ suspend fun verifyKeypadCode(keypadCode: String) = coroutineScope {
     }
     logger.warn { "Someone used a wrong pin at the keypad" }
 }
+
+fun Storage.toJson(): String = gsonPretty.toJson(this)
+
+
+fun Storage.save(file: File) = file.writeText(toJson())

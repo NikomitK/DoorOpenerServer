@@ -15,8 +15,6 @@ import kotlin.random.nextInt
 
 object ConnectionHandler : CoroutineScope by MainScope() {
     private val gson = Gson()
-    private fun Socket.readLine() = BufferedReader(InputStreamReader(getInputStream())).readLine()
-    private fun String.toMessage(): Message = gson.fromJson(this, Message::class.java)
     private const val success = "Success!"
 
     suspend fun handleConnection(socket: Socket) = coroutineScope {
@@ -82,7 +80,7 @@ object ConnectionHandler : CoroutineScope by MainScope() {
             PrintWriter(socket.getOutputStream(), true).println(Gson().toJson(response))
             socket.close()
         }
-        storageFile.writeText(gsonPretty.toJson(storage))
+        storage.save(storageFile)
     }
 
     private suspend fun configTls(message: Message, ipAddress: String): Response = coroutineScope {
@@ -190,12 +188,17 @@ object ConnectionHandler : CoroutineScope by MainScope() {
 
     private suspend fun optAdd(message: Message, ipAddress: String): Response = coroutineScope {
         val response = Response()
-        val tempOtp: Otp = Gson().fromJson(message.content, Otp::class.java)
-        storage.otps[tempOtp.pin] = LocalDate.parse(tempOtp.expirationDate)
-        response.text = "Saved OTP! :D"
-        response.internalMessage = "success"
-        logger.info("$ipAddress added a new OTP")
-        return@coroutineScope response
+        message.content?.toOtp()?.let {
+            storage.otps[it.pin] = LocalDate.parse(it.expirationDate)
+            response.text = "Saved OTP! :D"
+            response.internalMessage = "success"
+            logger.info("$ipAddress added a new OTP")
+            return@coroutineScope response
+        }
+        return@coroutineScope response.apply {
+            text = "Invalid OTP"
+            internalMessage = "invalid otp"
+        }
     }
 
     private suspend fun otpRemove(message: Message, ipAddress: String): Response = coroutineScope {
@@ -279,5 +282,11 @@ object ConnectionHandler : CoroutineScope by MainScope() {
     private fun renewToken(token: String) {
         storage.tokens[token] = LocalDate.now().plusDays(30)
     }
+
+    private fun Socket.readLine() = BufferedReader(InputStreamReader(getInputStream())).readLine()
+
+    private fun String.toMessage(): Message = gson.fromJson(this, Message::class.java)
+
+    private fun String.toOtp(): Otp = gson.fromJson(this, Otp::class.java)
 
 }
