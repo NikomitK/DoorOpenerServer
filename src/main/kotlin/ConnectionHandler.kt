@@ -1,9 +1,9 @@
-import ConnectionHandler.readLine
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import kotlinx.coroutines.*
 import messagetypes.Message
 import messagetypes.Response
+import org.mindrot.jbcrypt.BCrypt
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -33,7 +33,7 @@ object ConnectionHandler : CoroutineScope by MainScope() {
         if (message.type == "login") {
             response = handleLogin(message, ipAddress)
         } else if (message.type == "otpOpen") {
-            otpOpen(message, ipAddress)
+            response = otpOpen(message, ipAddress)
         } else {
             if (authenticateToken(message)) {
                 response = when (message.type) {
@@ -105,7 +105,7 @@ object ConnectionHandler : CoroutineScope by MainScope() {
         val response = Response()
         if (message.isNewDevice!!) {
             if (storage.pin == null) {
-                storage.pin = message.pin
+                storage.pin = BCrypt.hashpw(message.pin.toString(), BCrypt.gensalt())
                 response.text = success
                 response.internalMessage = generateToken()
                 logger.info { "Hello World, ig :)" }
@@ -114,7 +114,9 @@ object ConnectionHandler : CoroutineScope by MainScope() {
                 logger.warn("$ipAddress tried setting this up as new device")
             }
         } else {
-            if (message.pin == storage.pin && storage.pin != null) {
+            if (storage.pin?.let {
+                    checkpwSafe(message.pin.toString(), it)
+                } == true) {
                 response.text = success
                 response.internalMessage = generateToken()
                 logger.info("$ipAddress logged in")
@@ -216,7 +218,7 @@ object ConnectionHandler : CoroutineScope by MainScope() {
 
     private suspend fun changePin(message: Message, ipAddress: String): Response = coroutineScope {
         val response = Response()
-        storage.pin = Integer.parseInt(message.content)
+        storage.pin = BCrypt.hashpw(message.content, BCrypt.gensalt())
         storage.tokens.clear()
         response.text = "Changed pin! :D"
         response.internalMessage = "success"

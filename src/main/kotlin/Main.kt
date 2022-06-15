@@ -9,6 +9,7 @@ import mu.KotlinLogging
 import org.jnativehook.GlobalScreen
 import org.jnativehook.keyboard.NativeKeyEvent
 import org.jnativehook.keyboard.NativeKeyListener
+import org.mindrot.jbcrypt.BCrypt
 import raspberrypi.OutputPin
 import java.io.File
 import java.net.ServerSocket
@@ -25,14 +26,8 @@ import kotlin.random.nextInt
 
 val scope = MainScope()
 lateinit var storage: Storage
-var secure: Boolean = false
-var cliJob: Job? = null
-var secureServerJob: Job? = null
-
-//var secureServerThread: SecureSocketThread? = SecureSocketThread()
 lateinit var serverSocket: ServerSocket
 
-//var secureServerSocket: SSLServerSocket? = null
 val storagePath: File = File("storage")
 val storageFile: File = File(storagePath.path + File.separator + "storageFile.json")
 val certificatePath: File = File("certificates")
@@ -76,21 +71,31 @@ var keyListener = object : NativeKeyListener {
     }
 }
 
+fun checkpwSafe(plainText: String, hashed: String): Boolean {
+    return try {
+        BCrypt.checkpw(plainText, hashed)
+    } catch (illegalArgument: IllegalArgumentException) {
+        logger.error { "Stored Pin is invalid, please reset" }
+        false
+    }
+}
+
 fun main(args: Array<String>) {
-    // TODO store pin hashed, own messagetype for otp, answer with better string than invalid token for wrong otp
+    // TODO own messagetype for otp, answer with better string than invalid token for wrong otp
 
     println("Hello World!")
     println("Program arguments: ${args.joinToString()}")
 
 
-    // the next line is to prevent the console from being spammed
-    Logger.getLogger(GlobalScreen::class.java.getPackage().name).level = Level.OFF
 
-    GlobalScreen.registerNativeHook()
 
     initStorage()
 
     // Keypad stuff
+    // the next line is to prevent the console from being spammed
+    Logger.getLogger(GlobalScreen::class.java.getPackage().name).level = Level.OFF
+
+    GlobalScreen.registerNativeHook()
     switchKeypad()
 
     thread {
@@ -147,8 +152,6 @@ fun main(args: Array<String>) {
         }
     }
 
-
-// API loop
     while (true) {
         try {
             val socket = serverSocket.accept()
@@ -156,7 +159,6 @@ fun main(args: Array<String>) {
                 println("Connection from: " + socket.inetAddress)
                 socket.soTimeout = 1500
                 ConnectionHandler.handleConnection(socket)
-                if (socket.isConnected) socket.close()
             }
         } catch (_: SocketException) { // useless
         }
@@ -308,7 +310,9 @@ fun unregisterKeypad() {
 }
 
 suspend fun verifyKeypadCode(keypadCode: String) = coroutineScope {
-    if (storage.pin == keypadCode.toIntOrNull()) {
+    if (storage.pin?.let {
+            checkpwSafe(keypadCode, it)
+        } == true) {
         launch { open(storage.keypadTime) }
         logger.info { "The door was opened by the keypad" }
         return@coroutineScope
