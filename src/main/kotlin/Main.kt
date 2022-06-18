@@ -82,7 +82,7 @@ fun checkpwSafe(plainText: String, hashed: String): Boolean {
 
 fun main(args: Array<String>) {
 
-    println("Hello World!")
+    println("Hello World! :D")
     println("Program arguments: ${args.joinToString()}")
 
     initStorage()
