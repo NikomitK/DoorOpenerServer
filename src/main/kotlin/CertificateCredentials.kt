@@ -1,3 +1,1 @@
-data class CertificateCredentials(val keystoreName: String, val keystorePassword: String){
-
-}
+data class CertificateCredentials(val keystoreName: String, val keystorePassword: String)
