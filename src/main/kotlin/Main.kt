@@ -192,7 +192,7 @@ fun switchKeypad() {
 /**
  * creates a server socket running
  * on port 5687
- * returns a ServerSocket
+ * @return a ServerSocket
  */
 fun createServerSocket(): ServerSocket {
     return ServerSocket(5687)
@@ -230,7 +230,7 @@ fun checkCertificateCredentials(): Boolean {
 
 /**
  * tries using the supplied keystore name and password
- * returns true if everything worked properly, else false
+ * @return true if everything worked properly, else false
  */
 fun useCertificateCredentials(): Boolean {
     return try {
